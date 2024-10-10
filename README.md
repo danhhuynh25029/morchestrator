@@ -16,3 +16,8 @@
     └── worker
         └── worker.go
 ```
+
+* Call docker engine 
+```
+curl --unix-socket /var/run/docker.sock http://v1.45/containers/${container-id}/json
+```
