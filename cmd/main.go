@@ -3,8 +3,16 @@ package main
 import (
 	"fmt"
 	gdocker "github.com/docker/go-docker"
+	"github.com/gin-gonic/gin"
+	"github.com/golang-collections/collections/queue"
+	"github.com/google/uuid"
+	"log"
+	"morchestrator/internal/manager"
 	"morchestrator/internal/task"
+	"morchestrator/internal/transport/api"
+	"morchestrator/internal/worker"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -42,13 +50,73 @@ func stopContainer(d *task.Docker, id string) *task.DockerResult {
 }
 
 func main() {
-	fmt.Printf("create a test container\n")
-	dockerTask, createResult := createContainer()
-	if createResult.Error != nil {
-		fmt.Printf("%v", createResult.Error)
-		os.Exit(1)
+	port, _ := strconv.Atoi(os.Getenv("MOR_PORT"))
+
+	router := gin.Default()
+	w := worker.Worker{
+		Queue: *queue.New(),
+		Db:    make(map[uuid.UUID]*task.Task),
 	}
-	time.Sleep(time.Second * 5)
-	fmt.Printf("stopping container %s\n", createResult.ContainerId)
-	_ = stopContainer(dockerTask, createResult.ContainerId)
+	apiHttp := api.Api{
+		Router: router,
+		Worker: &w,
+	}
+	apiHttp.InitRoute()
+	if port == 0 {
+		port = 8080
+	}
+
+	workers := []string{fmt.Sprintf("%s:%d", "localhost", port)}
+	m := manager.New(workers)
+	go runTasks(&w)
+	go w.CollectStats()
+	go func() {
+		if err := router.Run(fmt.Sprintf(":%v", port)); err != nil {
+			panic(err)
+		}
+	}()
+
+	for i := 0; i < 3; i++ {
+		t := task.Task{
+			ID:    uuid.New(),
+			Name:  fmt.Sprintf("test-container-%d", i),
+			State: task.Scheduled,
+			Image: "hello-world",
+		}
+		te := task.TaskEvent{
+			ID:    uuid.New(),
+			State: task.Running,
+			Task:  t,
+		}
+		m.AddTask(te)
+		m.SendWorker()
+	}
+	go func() {
+		for {
+			fmt.Printf("[Manager] Updating tasks from %d workers\n", len(m.Workers))
+			m.UpdateTasks()
+			time.Sleep(15 * time.Second)
+		}
+	}()
+	for {
+		for _, t := range m.TaskDb {
+			fmt.Printf("[Manager] Task: id: %s, state: %d\n", t.ID, t.State)
+			time.Sleep(15 * time.Second)
+		}
+	}
+}
+
+func runTasks(w *worker.Worker) {
+	for {
+		if w.Queue.Len() != 0 {
+			result := w.RunTask()
+			if result.Error != nil {
+				log.Printf("Error running task: %v\n", result.Error)
+			}
+		} else {
+			log.Printf("No tasks to process currently.\n")
+		}
+		log.Println("Sleeping for 10 seconds.")
+		time.Sleep(10 * time.Second)
+	}
 }

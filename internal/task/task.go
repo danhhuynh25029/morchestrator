@@ -25,15 +25,18 @@ const (
 )
 
 type Task struct {
-	ID            uuid.UUID `json:"id"`
+	ID            uuid.UUID
+	ContainerID   string
 	Name          string
 	State         State
 	Image         string
-	Memory        int
-	Disk          int
+	Memory        int64
+	Disk          int64
 	ExposedPorts  nat.PortSet
 	PortBindings  map[string]string
 	RestartPolicy string
+	StartTime     time.Time
+	FinishTime    time.Time
 }
 
 type TaskEvent struct {
@@ -61,9 +64,28 @@ type Config struct {
 	}
 }
 
+func NewConfig(t *Task) Config {
+	return Config{
+		RestartPolicy: t.RestartPolicy,
+		Image:         t.Image,
+		Memory:        int64(t.Memory),
+		ExposedPorts:  t.ExposedPorts,
+		Disk:          int64(t.Disk),
+		Name:          t.Name,
+	}
+}
+
 type Docker struct {
 	Client *gdocker.Client
 	Config Config
+}
+
+func NewDocker(cfg Config) Docker {
+	dc, _ := gdocker.NewEnvClient()
+	return Docker{
+		Config: cfg,
+		Client: dc,
+	}
 }
 
 func (d *Docker) Run() DockerResult {
